@@ -3,27 +3,36 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
-export default function LoginPage() {
+/** 로그인 화면 mock 초기 패스워드와 동일해야 함 */
+const INITIAL_PASSWORD = "0000";
+
+export default function ChangePasswordPage() {
   const router = useRouter();
-  const [lDap, setLDap] = useState("");
-  const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
-    setIsSubmitting(true);
 
-    const ok = lDap.trim() === "aaa.bb" && password === "0000";
-
-    if (ok) {
-      router.push("/change_password");
+    if (!newPassword.trim() || !confirmPassword.trim()) {
+      setError("패스워드를 입력해주세요.");
       return;
     }
 
-    setError("L.dap 또는 패스워드를 확인해주세요.");
-    setIsSubmitting(false);
+    if (newPassword === INITIAL_PASSWORD) {
+      setError("초기 패스워드는 사용할 수 없습니다.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError("패스워드가 일치하지 않습니다.");
+      return;
+    }
+
+    alert("패스워드가 성공적으로 변경되었습니다!");
+    router.push("/home");
   };
 
   return (
@@ -32,53 +41,44 @@ export default function LoginPage() {
         <div className="absolute inset-0 -z-10 rounded-[1.8rem] bg-[radial-gradient(ellipse_at_top,_rgba(236,72,153,0.20),transparent_55%),radial-gradient(ellipse_at_bottom,_rgba(34,211,238,0.14),transparent_50%)]" />
 
         <div className="rounded-[1.8rem] border border-white/10 bg-zinc-900/60 backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)] p-[1.35rem] sm:p-[1.8rem]">
-          <div className="text-center">
-            <h1 className="mt-[1.125rem] text-[2.2rem] sm:text-[3.0rem] font-black tracking-tight">
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-400 via-violet-400 to-cyan-300">
-                Kroove
-              </span>
-            </h1>
-            <p className="mt-0 text-[0.88rem] sm:text-[1.0rem] text-zinc-400">
-              Kakao Dance Crew
-            </p>
-          </div>
+          <h1 className="text-center text-[1.1rem] sm:text-[1.2rem] font-bold text-zinc-100 tracking-tight">
+            초기 패스워드 변경
+          </h1>
 
           <form className="mt-[1.35rem]" onSubmit={handleSubmit}>
             <div className="space-y-[0.9rem]">
               <div>
                 <label
-                  htmlFor="l-dap"
-                  className="sr-only"
+                  htmlFor="new-password"
+                  className="block text-sm font-medium text-zinc-200 mb-[0.45rem]"
                 >
-                  L.dap
+                  새 패스워드
                 </label>
                 <input
-                  id="l-dap"
-                  name="l-dap"
-                  value={lDap}
-                  onChange={(e) => setLDap(e.target.value)}
-                  autoComplete="username"
-                  inputMode="text"
-                  placeholder="L.dap"
+                  id="new-password"
+                  name="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  type="password"
+                  autoComplete="new-password"
                   className="w-full rounded-[0.675rem] bg-zinc-800/60 border border-white/10 px-[0.9rem] py-[0.68rem] text-zinc-50 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/60 focus:border-fuchsia-400/40"
                 />
               </div>
 
               <div>
                 <label
-                  htmlFor="password"
-                  className="sr-only"
+                  htmlFor="confirm-password"
+                  className="block text-sm font-medium text-zinc-200 mb-[0.45rem]"
                 >
-                  Password
+                  새 패스워드 확인
                 </label>
                 <input
-                  id="password"
-                  name="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  id="confirm-password"
+                  name="confirm-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
                   type="password"
-                  autoComplete="current-password"
-                  placeholder="password"
+                  autoComplete="new-password"
                   className="w-full rounded-[0.675rem] bg-zinc-800/60 border border-white/10 px-[0.9rem] py-[0.68rem] text-zinc-50 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/60 focus:border-fuchsia-400/40"
                 />
               </div>
@@ -86,10 +86,9 @@ export default function LoginPage() {
 
             <button
               type="submit"
-              disabled={isSubmitting}
-              className="mt-[1.35rem] w-full rounded-[0.675rem] bg-gradient-to-r from-fuchsia-500 to-violet-500 px-[1.125rem] py-[0.79rem] font-semibold text-white shadow-[0_14px_40px_rgba(192,132,252,0.35)] hover:brightness-110 active:brightness-95 disabled:opacity-70 disabled:cursor-not-allowed transition"
+              className="mt-[1.35rem] w-full rounded-[0.675rem] bg-gradient-to-r from-fuchsia-500 to-violet-500 px-[1.125rem] py-[0.79rem] font-semibold text-white shadow-[0_14px_40px_rgba(192,132,252,0.35)] hover:brightness-110 active:brightness-95 transition"
             >
-              {isSubmitting ? "로그인 중..." : "로그인"}
+              변경하기
             </button>
 
             {error ? (
