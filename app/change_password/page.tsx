@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { supabase } from "@/src/lib/supabase";
 
 /** 로그인 화면 mock 초기 패스워드와 동일해야 함 */
 const INITIAL_PASSWORD = "0000";
@@ -11,27 +12,70 @@ export default function ChangePasswordPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setError(null);
+    setIsSubmitting(true);
 
     if (!newPassword.trim() || !confirmPassword.trim()) {
       setError("패스워드를 입력해주세요.");
+      setIsSubmitting(false);
       return;
     }
 
     if (newPassword === INITIAL_PASSWORD) {
       setError("초기 패스워드는 사용할 수 없습니다.");
+      setIsSubmitting(false);
       return;
     }
 
     if (newPassword !== confirmPassword) {
       setError("패스워드가 일치하지 않습니다.");
+      setIsSubmitting(false);
       return;
     }
 
-    alert("패스워드가 성공적으로 변경되었습니다!");
+    const { error: updateAuthError } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (updateAuthError) {
+      console.error("비밀번호 변경(Auth) 실패:", updateAuthError.message);
+      alert(`비밀번호 변경 중 오류가 발생했습니다: ${updateAuthError.message}`);
+      setIsSubmitting(false);
+      return;
+    }
+
+    const {
+      data: { user },
+      error: getUserError,
+    } = await supabase.auth.getUser();
+
+    if (getUserError || !user) {
+      console.error("현재 사용자 조회 실패:", getUserError?.message);
+      alert("현재 사용자 정보를 가져오지 못했습니다.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const markDoneResponse = await fetch("/api/auth/complete-password-change", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: user.id }),
+    });
+
+    if (!markDoneResponse.ok) {
+      const result = (await markDoneResponse.json()) as { message?: string };
+      console.error("members 업데이트 실패:", result.message);
+      alert(`회원 정보 업데이트 중 오류가 발생했습니다: ${result.message ?? "unknown"}`);
+      setIsSubmitting(false);
+      return;
+    }
+
+    alert("비밀번호가 성공적으로 변경되었습니다!");
     router.push("/home");
   };
 
@@ -67,6 +111,7 @@ export default function ChangePasswordPage() {
 
               <div>
                 <label
+
                   htmlFor="confirm-password"
                   className="block text-sm font-medium text-zinc-200 mb-[0.45rem]"
                 >
@@ -86,9 +131,10 @@ export default function ChangePasswordPage() {
 
             <button
               type="submit"
+              disabled={isSubmitting}
               className="mt-[1.35rem] w-full rounded-[0.675rem] bg-gradient-to-r from-fuchsia-500 to-violet-500 px-[1.125rem] py-[0.79rem] font-semibold text-white shadow-[0_14px_40px_rgba(192,132,252,0.35)] hover:brightness-110 active:brightness-95 transition"
             >
-              변경하기
+              {isSubmitting ? "변경 중..." : "변경하기"}
             </button>
 
             {error ? (

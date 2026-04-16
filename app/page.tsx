@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { supabase } from "@/src/lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -10,20 +11,77 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
     setIsSubmitting(true);
 
-    const ok = lDap.trim() === "aaa.bb" && password === "0000";
+    const trimmedLdap = lDap.trim();
+    const email = `${trimmedLdap}@kakaocorp.com`;
 
-    if (ok) {
+// 1️⃣ 먼저 지하 금고(auth.users) 문부터 엽니다! (로그인 먼저)
+    const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (signInError) {
+      // 👇 이 줄을 추가해서 진짜 이유를 콘솔에서 확인해 보세요!
+      console.error("🚨 Supabase가 뱉은 진짜 로그인 에러:", signInError.message);
+      setError("아이디 또는 비밀번호를 확인해주세요.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    // 2️⃣ 로그인이 성공했으니(VIP 출입증 생김), 이제 당당하게 1층 로비(members) 명부를 확인합니다!
+    const { data: member, error: memberError } = await supabase
+      .from("members")
+      .select("id, is_initial_password, status")
+      .eq("ldap", trimmedLdap)
+      .maybeSingle();
+
+    if (memberError || !member) {
+      setError("등록된 회원이 아닙니다.");
+      // 만약 로그인은 됐는데 members 명단에 없다면, 다시 로그아웃 시키는 게 안전합니다.
+      await supabase.auth.signOut(); 
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (member.status === "withdrawn") {
+      setError("탈퇴된 회원입니다.");
+      await supabase.auth.signOut();
+      setIsSubmitting(false);
+      return;
+    }
+
+    const sessionResponse = await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ldap: trimmedLdap }),
+    });
+
+    if (!sessionResponse.ok) {
+      setError("세션 생성에 실패했습니다. 잠시 후 다시 시도해주세요.");
+      await supabase.auth.signOut();
+      setIsSubmitting(false);
+      return;
+    }
+
+    const mustChangePassword =
+      member.is_initial_password === true ||
+      member.is_initial_password === "true" ||
+      member.is_initial_password === "t" ||
+      member.is_initial_password === 1;
+
+    console.log("login member.is_initial_password:", member.is_initial_password);
+
+    if (mustChangePassword) {
       router.push("/change_password");
       return;
     }
 
-    setError("L.dap 또는 패스워드를 확인해주세요.");
-    setIsSubmitting(false);
+    router.push("/home");
   };
 
   return (
