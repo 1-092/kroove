@@ -533,14 +533,19 @@ export default function HomePage() {
   const filteredClasses = useMemo(() => {
     const list = classes.filter((item) => {
       if (activeFilter === "all") return true;
-      if (activeFilter === "my") return item.isRegistered;
+      if (activeFilter === "my") {
+        const myBookingStatus = myBookingByClass[item.id];
+        const isMyBooking = myBookingStatus === "completed" || myBookingStatus === "pending";
+        const isMyCreatedClass = !!currentLdap && item.createdWho === currentLdap;
+        return isMyBooking || isMyCreatedClass;
+      }
       return item.classType === activeFilter;
     });
 
     return list.sort(
       (a, b) => toTimestamp(b.date, b.time) - toTimestamp(a.date, a.time)
     );
-  }, [activeFilter, classes]);
+  }, [activeFilter, classes, currentLdap, myBookingByClass]);
 
   const tabs: Array<{ key: FilterKey; label: string }> = [
     { key: "all", label: "전체" },
