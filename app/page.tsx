@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/src/lib/supabase";
 
 export default function LoginPage() {
@@ -10,6 +10,16 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    const redirectIfLoggedIn = async () => {
+      const response = await fetch("/api/auth/me", { method: "GET" });
+      if (!response.ok) return;
+      router.replace("/home");
+    };
+
+    void redirectIfLoggedIn();
+  }, [router]);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();

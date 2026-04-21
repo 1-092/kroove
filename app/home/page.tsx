@@ -11,6 +11,8 @@ type FilterKey = "all" | "my" | ClassType;
 type DbClassRow = {
   id: string | number;
   class_type?: string | null;
+  created_who?: string | null;
+  open_at?: string | null;
   date?: string | null;
   time?: string | null;
   title?: string | null;
@@ -24,6 +26,7 @@ type DbClassRow = {
 };
 
 type BookingRow = {
+  classId?: string;
   myStatus?: "completed" | "pending" | null;
   applicantLdaps?: string[];
   currentSeats?: number;
@@ -40,6 +43,8 @@ type AuthMeResponse = {
 type ClassCard = {
   id: string;
   classType: ClassType;
+  createdWho?: string;
+  openAt?: string;
   date: string; // YYYY-MM-DD
   time: string; // HH:mm
   title: string;
@@ -94,8 +99,48 @@ function formatDateKorean(yyyyMmDd: string) {
   return `${month}.${day} (${weekday})`;
 }
 
+function parseKstTimestamp(input: string) {
+  const hasOffset = /([zZ]|[+\-]\d{2}:\d{2})$/.test(input);
+  const normalized = hasOffset ? input : `${input}+09:00`;
+  const ts = new Date(normalized).getTime();
+  return Number.isFinite(ts) ? ts : NaN;
+}
+
+function parseOpenAtAsKstWallClock(input: string) {
+  const m = input.match(
+    /(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/
+  );
+  if (!m) return NaN;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = Number(m[6] ?? "0");
+  const ts = Date.UTC(year, month - 1, day, hour - 9, minute, second);
+  return Number.isFinite(ts) ? ts : NaN;
+}
+
+function formatOpenAtLabel(openAt: string) {
+  const ts = parseOpenAtAsKstWallClock(openAt);
+  if (!Number.isFinite(ts)) return "신청 가능 시간 전";
+  const parts = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(ts));
+  const month = parts.find((p) => p.type === "month")?.value ?? "00";
+  const day = parts.find((p) => p.type === "day")?.value ?? "00";
+  const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+  const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
+  return `${month}.${day} ${hh}:${mm}부터 신청 가능`;
+}
+
 function toTimestamp(date: string, time: string) {
-  return new Date(`${date}T${time}:00`).getTime();
+  return parseKstTimestamp(`${date}T${time}:00`);
 }
 
 function getTodayISO() {
@@ -140,6 +185,8 @@ function mapRowToCard(row: DbClassRow): ClassCard {
   return {
     id: String(row.id),
     classType,
+    createdWho: row.created_who ?? undefined,
+    openAt: row.open_at ?? undefined,
     date: normalizeDate(row.date),
     time: normalizeTime(row.time),
     title: row.title ?? row.class_name ?? "제목 없음 클래스",
@@ -163,13 +210,30 @@ export default function HomePage() {
   const [isModalLoading, setIsModalLoading] = useState(false);
   const [applicantLdaps, setApplicantLdaps] = useState<string[]>([]);
   const [isApplicantsLoading, setIsApplicantsLoading] = useState(false);
+  const [isBookingStateLoading, setIsBookingStateLoading] = useState(false);
   const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
   const [bookingMessage, setBookingMessage] = useState<string | null>(null);
   const [myBookingStatus, setMyBookingStatus] = useState<"completed" | "pending" | null>(null);
+  const [myBookingByClass, setMyBookingByClass] = useState<Record<string, "completed" | "pending">>(
+    {}
+  );
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const [currentLdap, setCurrentLdap] = useState("");
   const [currentRole, setCurrentRole] = useState<"member" | "manager" | "head" | null>(null);
   const [isMyMenuOpen, setIsMyMenuOpen] = useState(false);
   const [isAddClassOpen, setIsAddClassOpen] = useState(false);
+  const [isEditClassOpen, setIsEditClassOpen] = useState(false);
+  const [isEditClassSubmitting, setIsEditClassSubmitting] = useState(false);
+  const [editClassName, setEditClassName] = useState("");
+  const [editDate, setEditDate] = useState(getTodayISO());
+  const [editTime, setEditTime] = useState("19:10");
+  const [editMaxParticipants, setEditMaxParticipants] = useState("");
+  const [editClassType, setEditClassType] = useState<ClassType>("품앗이");
+  const [editDescription, setEditDescription] = useState("");
+  const [editYoutubeUrl, setEditYoutubeUrl] = useState("");
+  const [editIsFirstComeOpen, setEditIsFirstComeOpen] = useState(false);
+  const [editOpenDate, setEditOpenDate] = useState(getTodayISO());
+  const [editOpenTime, setEditOpenTime] = useState("13:30");
   const [newClassName, setNewClassName] = useState("");
   const [newDate, setNewDate] = useState(getTodayISO());
   const [newTime, setNewTime] = useState("19:10");
@@ -178,6 +242,7 @@ export default function HomePage() {
   const [newOpenTime, setNewOpenTime] = useState("13:30");
   const [newMaxParticipants, setNewMaxParticipants] = useState("");
   const [newClassType, setNewClassType] = useState<ClassType>("품앗이");
+  const [isPoomasiToastVisible, setIsPoomasiToastVisible] = useState(false);
   const [newDescription, setNewDescription] = useState("");
   const [newYoutubeUrl, setNewYoutubeUrl] = useState("");
   const [isAddClassSubmitting, setIsAddClassSubmitting] = useState(false);
@@ -193,8 +258,29 @@ export default function HomePage() {
   const calendarDropdownRef = useRef<HTMLDivElement | null>(null);
   const openTimeDropdownRef = useRef<HTMLDivElement | null>(null);
   const openCalendarDropdownRef = useRef<HTMLDivElement | null>(null);
+  const poomasiToastTimerRef = useRef<number | null>(null);
   const timeOptions = useMemo(() => generateTimeOptions(9, 21, 10, 0), []);
   const openTimeOptions = useMemo(() => generateTimeOptions(9, 21, 30, 0), []);
+
+  useEffect(() => {
+    return () => {
+      if (poomasiToastTimerRef.current) {
+        window.clearTimeout(poomasiToastTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAddClassOpen || newClassType !== "품앗이") return;
+    setIsPoomasiToastVisible(true);
+    if (poomasiToastTimerRef.current) {
+      window.clearTimeout(poomasiToastTimerRef.current);
+    }
+    poomasiToastTimerRef.current = window.setTimeout(() => {
+      setIsPoomasiToastVisible(false);
+      poomasiToastTimerRef.current = null;
+    }, 1800);
+  }, [isAddClassOpen, newClassType]);
 
   useEffect(() => {
     const fetchMe = async () => {
@@ -273,6 +359,33 @@ export default function HomePage() {
   }, [isOpenCalendarOpen]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowTs(Date.now());
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const fetchMyBookings = async () => {
+      if (!currentLdap) {
+        setMyBookingByClass({});
+        return;
+      }
+      const response = await fetch("/api/bookings/mine", { method: "GET" });
+      const result = (await response.json()) as {
+        byClass?: Record<string, "completed" | "pending">;
+      };
+      if (!response.ok) {
+        setMyBookingByClass({});
+        return;
+      }
+      setMyBookingByClass(result.byClass ?? {});
+    };
+
+    void fetchMyBookings();
+  }, [currentLdap, classes.length]);
+
+  useEffect(() => {
     const fetchClasses = async () => {
       setIsLoading(true);
       const { data, error } = await supabase.from("classes").select("*");
@@ -318,6 +431,7 @@ export default function HomePage() {
 
   const fetchBookingState = async (classId: string) => {
     setIsApplicantsLoading(true);
+    setIsBookingStateLoading(true);
     setBookingMessage(null);
 
     const response = await fetch(`/api/bookings?classId=${encodeURIComponent(classId)}`, {
@@ -329,11 +443,21 @@ export default function HomePage() {
       setMyBookingStatus(null);
       setBookingMessage(result.message ?? "신청 상태를 불러오지 못했습니다.");
       setIsApplicantsLoading(false);
+      setIsBookingStateLoading(false);
       return;
     }
 
     setApplicantLdaps(result.applicantLdaps ?? []);
     setMyBookingStatus(result.myStatus ?? null);
+    setMyBookingByClass((prev) => {
+      const next = { ...prev };
+      if (result.myStatus === "completed" || result.myStatus === "pending") {
+        next[classId] = result.myStatus;
+      } else {
+        delete next[classId];
+      }
+      return next;
+    });
     if (typeof result.currentSeats === "number") {
       setClasses((prev) =>
         prev.map((item) =>
@@ -345,6 +469,7 @@ export default function HomePage() {
       );
     }
     setIsApplicantsLoading(false);
+    setIsBookingStateLoading(false);
   };
 
   useEffect(() => {
@@ -379,6 +504,15 @@ export default function HomePage() {
     setBookingMessage(null);
     setApplicantLdaps(result.applicantLdaps ?? []);
     setMyBookingStatus(result.myStatus ?? null);
+    setMyBookingByClass((prev) => {
+      const next = { ...prev };
+      if (result.myStatus === "completed" || result.myStatus === "pending") {
+        next[selectedClassId] = result.myStatus;
+      } else {
+        delete next[selectedClassId];
+      }
+      return next;
+    });
     if (typeof result.currentSeats === "number") {
       setClasses((prev) =>
         prev.map((item) =>
@@ -418,11 +552,34 @@ export default function HomePage() {
     selectedClass ? selectedClass.currentSeats >= selectedClass.maxSeats : false;
   const bookingButtonLabel = isBookingSubmitting
     ? "처리 중..."
-    : myBookingStatus
-      ? "취소"
-      : isClassFull
-        ? "대기"
-        : "클래스 참여";
+    : isBookingStateLoading
+      ? "로딩 중..."
+    : myBookingStatus === "pending"
+      ? "대기 취소"
+      : myBookingStatus === "completed"
+        ? "참여 취소"
+        : isClassFull
+          ? "대기 신청"
+          : "참여 신청";
+  const isBeforeOpenAt =
+    !!selectedClass?.openAt &&
+    Number.isFinite(parseOpenAtAsKstWallClock(selectedClass.openAt)) &&
+    nowTs < parseOpenAtAsKstWallClock(selectedClass.openAt);
+  const isAfterClassTime =
+    !!selectedClass &&
+    Number.isFinite(toTimestamp(selectedClass.date, selectedClass.time)) &&
+    nowTs > toTimestamp(selectedClass.date, selectedClass.time);
+  const openAtDisabledLabel =
+    isBeforeOpenAt && selectedClass?.openAt ? formatOpenAtLabel(selectedClass.openAt) : null;
+  const bookingButtonText =
+    openAtDisabledLabel && myBookingStatus === null ? openAtDisabledLabel : bookingButtonLabel;
+  const isBookingButtonDisabled =
+    isBookingSubmitting || isBookingStateLoading || (isBeforeOpenAt && myBookingStatus === null);
+  const canEditSelectedClass =
+    !!selectedClass &&
+    !!selectedClass.createdWho &&
+    selectedClass.createdWho === currentLdap &&
+    !isAfterClassTime;
 
   const handleLogout = async () => {
     await fetch("/api/auth/session", { method: "DELETE" });
@@ -492,6 +649,48 @@ export default function HomePage() {
     alert("클래스가 등록되었습니다!");
   };
 
+  const handleSubmitEditClass = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selectedClass || isEditClassSubmitting) return;
+    setIsEditClassSubmitting(true);
+    const response = await fetch("/api/admin/classes", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        classId: selectedClass.id,
+        className: editClassName.trim(),
+        date: editDate.trim(),
+        time: editTime.trim(),
+        maxParticipants: Number(editMaxParticipants),
+        classType: editClassType,
+        description: editDescription.trim(),
+        youtubeUrl: editYoutubeUrl.trim(),
+        isFirstComeOpen: editClassType === "정규" ? editIsFirstComeOpen : false,
+        openDate: editClassType === "정규" && editIsFirstComeOpen ? editOpenDate.trim() : undefined,
+        openTime: editClassType === "정규" && editIsFirstComeOpen ? editOpenTime.trim() : undefined,
+      }),
+    });
+    const result = (await response.json()) as { message?: string };
+    if (!response.ok) {
+      alert(result.message ?? "클래스 수정에 실패했습니다.");
+      if (result.message === "이미 시작 또는 종료된 클래스입니다.") {
+        setIsEditClassOpen(false);
+      }
+      setIsEditClassSubmitting(false);
+      return;
+    }
+    const { data, error } = await supabase.from("classes").select("*");
+    if (!error) {
+      const mapped = ((data ?? []) as DbClassRow[]).map(mapRowToCard);
+      setClasses(mapped);
+      if (selectedClassId) {
+        setSelectedClass(mapped.find((item) => item.id === selectedClassId) ?? null);
+      }
+    }
+    setIsEditClassOpen(false);
+    setIsEditClassSubmitting(false);
+  };
+
   const calendarYear = calendarCurrentDate.getFullYear();
   const calendarMonthIndex = calendarCurrentDate.getMonth();
   const calendarDaysInMonth = new Date(calendarYear, calendarMonthIndex + 1, 0).getDate();
@@ -521,15 +720,15 @@ export default function HomePage() {
             </span>
           </h1>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAddClassOpen(true)}
+              className="shrink-0 rounded-full bg-gradient-to-r from-fuchsia-500 to-violet-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_40px_rgba(192,132,252,0.25)] hover:brightness-110 active:brightness-95 transition"
+            >
+              클래스개설
+            </button>
             {currentRole === "head" || currentRole === "manager" ? (
               <>
-                <button
-                  type="button"
-                  onClick={() => setIsAddClassOpen(true)}
-                  className="shrink-0 rounded-full bg-gradient-to-r from-fuchsia-500 to-violet-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_40px_rgba(192,132,252,0.25)] hover:brightness-110 active:brightness-95 transition"
-                >
-                  클래스개설
-                </button>
                 <Link
                   href="/admin/add-member"
                   className="shrink-0 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_40px_rgba(56,189,248,0.25)] hover:brightness-110 active:brightness-95 transition"
@@ -641,6 +840,10 @@ export default function HomePage() {
           ) : (
             filteredClasses.map((item) => {
               const remaining = item.maxSeats - item.currentSeats;
+              const isClassClosed = nowTs > toTimestamp(item.date, item.time);
+              const myStatus = myBookingByClass[item.id];
+              const hasMyBooking = myStatus === "completed" || myStatus === "pending";
+              const isFull = remaining <= 0;
               return (
                 <button
                   key={item.id}
@@ -680,12 +883,22 @@ export default function HomePage() {
                         <span className="font-semibold">
                           수강인원 {item.currentSeats}/{item.maxSeats}
                         </span>
-                        {remaining > 0 ? (
+                        {myStatus === "pending" && isFull ? (
+                          <span
+                            className="rounded-full border border-yellow-400/35 bg-yellow-500/15 px-2 py-1 text-[11px] font-bold text-yellow-200"
+                          >
+                            대기중
+                          </span>
+                        ) : hasMyBooking ? (
+                          <span className="rounded-full border border-blue-400/35 bg-blue-500/15 px-2 py-1 text-[11px] font-bold text-blue-200">
+                            신청완료
+                          </span>
+                        ) : remaining > 0 ? (
                           <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-bold text-emerald-200">
                             {remaining}석 남음
                           </span>
                         ) : (
-                          <span className="rounded-full border border-red-400/30 bg-red-500/10 px-2 py-1 text-[11px] font-bold text-red-200">
+                          <span className="rounded-full border border-red-400/35 bg-red-500/15 px-2 py-1 text-[11px] font-bold text-red-200">
                             정원 초과
                           </span>
                         )}
@@ -693,30 +906,53 @@ export default function HomePage() {
                     </div>
 
                     {item.youtubeUrl ? (
-                      <a
-                        href={item.youtubeUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="relative block h-20 w-28"
-                        aria-label={`${item.title} 유튜브 열기`}
-                      >
-                        {item.videoId ? (
-                          <img
-                            src={`https://img.youtube.com/vi/${item.videoId}/0.jpg`}
-                            alt={`${item.title} thumbnail`}
-                            className="h-20 w-28 rounded-xl border border-white/10 object-cover"
-                          />
-                        ) : (
-                          <div className="h-20 w-28 rounded-xl border border-white/10 bg-gradient-to-br from-fuchsia-500/30 via-violet-500/25 to-cyan-400/25" />
-                        )}
-                        <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                          <span className="rounded-full bg-black/55 px-2 py-1 text-xs font-black text-white">
-                            ►
+                      <div className="relative h-20 w-28 shrink-0">
+                        <a
+                          href={item.youtubeUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="relative block h-20 w-28"
+                          aria-label={`${item.title} 유튜브 열기`}
+                        >
+                          {item.videoId ? (
+                            <img
+                              src={`https://img.youtube.com/vi/${item.videoId}/0.jpg`}
+                              alt={`${item.title} thumbnail`}
+                              className="h-20 w-28 rounded-xl border border-white/10 object-cover"
+                            />
+                          ) : (
+                            <div className="h-20 w-28 rounded-xl border border-white/10 bg-gradient-to-br from-fuchsia-500/30 via-violet-500/25 to-cyan-400/25" />
+                          )}
+                          <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                            <span className="rounded-full bg-black/55 px-2 py-1 text-xs font-black text-white">
+                              ►
+                            </span>
                           </span>
+                        </a>
+                        <span
+                          className={[
+                            "pointer-events-none absolute right-1.5 top-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
+                            isClassClosed
+                              ? "bg-zinc-800/85 text-zinc-300"
+                              : "bg-emerald-500/85 text-white",
+                          ].join(" ")}
+                        >
+                          {isClassClosed ? "close" : "open"}
                         </span>
-                      </a>
-                    ) : null}
+                      </div>
+                    ) : (
+                      <span
+                        className={[
+                          "shrink-0 self-start rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
+                          isClassClosed
+                            ? "bg-zinc-800/85 text-zinc-300"
+                            : "bg-emerald-500/85 text-white",
+                        ].join(" ")}
+                      >
+                        {isClassClosed ? "close" : "open"}
+                      </span>
+                    )}
                   </div>
                 </button>
               );
@@ -736,12 +972,13 @@ export default function HomePage() {
               setApplicantLdaps([]);
               setBookingMessage(null);
               setMyBookingStatus(null);
+              setIsBookingStateLoading(false);
             }}
             className="absolute inset-0 bg-black/70 backdrop-blur-sm"
           />
 
           <div className="relative z-10 w-full max-w-lg rounded-[1.5rem] border border-white/10 bg-zinc-950/90 shadow-[0_30px_90px_rgba(0,0,0,0.65)] p-5 sm:p-6">
-            {isModalLoading ? (
+            {isModalLoading || isBookingStateLoading ? (
               <div className="flex flex-col items-center justify-center py-10">
                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-600 border-t-fuchsia-400" />
                 <p className="mt-3 text-sm text-zinc-400">로딩 중...</p>
@@ -750,27 +987,79 @@ export default function HomePage() {
               <>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs font-semibold text-zinc-300">
-                      {formatDateKorean(selectedClass.date)} · {selectedClass.time}
+                    <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
+                      <span
+                        className={[
+                          "rounded-full px-2 py-1 text-[11px] font-bold",
+                          selectedClass.classType === "정규"
+                            ? "bg-fuchsia-500/15 text-fuchsia-200"
+                            : "bg-cyan-400/15 text-cyan-200",
+                        ].join(" ")}
+                      >
+                        {selectedClass.classType}
+                      </span>
+                      <span>
+                        {formatDateKorean(selectedClass.date)} · {selectedClass.time}
+                      </span>
                     </div>
                     <h2 className="mt-1 text-xl font-black tracking-tight">
                       {selectedClass.title}
                     </h2>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedClassId(null);
-                      setSelectedClass(null);
-                      setApplicantLdaps([]);
-                      setBookingMessage(null);
-                      setMyBookingStatus(null);
-                    }}
-                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-zinc-200 hover:bg-white/10 transition"
-                  >
-                    닫기
-                  </button>
+                  <div className="flex items-start gap-2 self-start">
+                    {canEditSelectedClass ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!selectedClass) return;
+                          setEditClassType(selectedClass.classType);
+                          setEditDate(selectedClass.date);
+                          setEditTime(selectedClass.time);
+                          setEditClassName(selectedClass.title);
+                          setEditDescription(selectedClass.description ?? "");
+                          setEditMaxParticipants(String(selectedClass.maxSeats));
+                          setEditYoutubeUrl(selectedClass.youtubeUrl ?? "");
+                          const hasOpenAt = Boolean(selectedClass.openAt);
+                          setEditIsFirstComeOpen(hasOpenAt);
+                          if (selectedClass.openAt) {
+                            const m = selectedClass.openAt.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+                            if (m?.[1]) setEditOpenDate(m[1]);
+                            if (m?.[2]) setEditOpenTime(m[2]);
+                          } else {
+                            setEditOpenDate(selectedClass.date);
+                            setEditOpenTime("13:30");
+                          }
+                          setIsEditClassOpen(true);
+                        }}
+                        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10 transition"
+                        aria-label="클래스 수정"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                          <path d="M4 20H8L18.5 9.5C19.3 8.7 19.3 7.4 18.5 6.6L17.4 5.5C16.6 4.7 15.3 4.7 14.5 5.5L4 16V20Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                          <path d="M13.5 6.5L17.5 10.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedClassId(null);
+                        setSelectedClass(null);
+                        setApplicantLdaps([]);
+                        setBookingMessage(null);
+                        setMyBookingStatus(null);
+                        setIsBookingStateLoading(false);
+                      }}
+                      className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10 transition"
+                      aria-label="클래스 상세 닫기"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                        <path d="M6 6L18 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                        <path d="M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
 
                 {selectedClass.description ? (
@@ -833,32 +1122,115 @@ export default function HomePage() {
                   </a>
                 ) : null}
 
-                <div className="mt-4">
-                  <button
-                    type="button"
-                    disabled={isBookingSubmitting}
-                    onClick={() => void handleBookingAction()}
-                    className={[
-                      "w-full rounded-xl px-4 py-3 text-sm font-extrabold text-white hover:brightness-110 active:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed transition",
-                      bookingButtonLabel === "취소"
-                        ? "bg-red-500 shadow-[0_20px_60px_rgba(239,68,68,0.25)]"
-                        : bookingButtonLabel === "대기"
-                          ? "bg-yellow-500 shadow-[0_20px_60px_rgba(234,179,8,0.25)]"
-                          : "bg-blue-500 shadow-[0_20px_60px_rgba(59,130,246,0.25)]",
-                    ].join(" ")}
-                  >
-                    {bookingButtonLabel}
-                  </button>
-                  {bookingMessage ? (
-                    <p className="mt-2 text-xs font-semibold text-zinc-300">{bookingMessage}</p>
-                  ) : null}
-                </div>
+                {!isAfterClassTime ? (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      disabled={isBookingButtonDisabled}
+                      onClick={() => void handleBookingAction()}
+                      className={[
+                        "w-full rounded-xl px-4 py-3 text-sm font-extrabold text-white hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:bg-zinc-600 disabled:text-zinc-300 disabled:shadow-none disabled:hover:brightness-100 disabled:active:brightness-100 transition",
+                        bookingButtonLabel.includes("취소")
+                          ? "bg-red-500 shadow-[0_20px_60px_rgba(239,68,68,0.25)]"
+                          : bookingButtonLabel.includes("대기")
+                            ? "bg-yellow-500 shadow-[0_20px_60px_rgba(234,179,8,0.25)]"
+                            : "bg-blue-500 shadow-[0_20px_60px_rgba(59,130,246,0.25)]",
+                      ].join(" ")}
+                    >
+                      {bookingButtonText}
+                    </button>
+                    {bookingMessage ? (
+                      <p className="mt-2 text-xs font-semibold text-zinc-300">{bookingMessage}</p>
+                    ) : null}
+                    {bookingButtonLabel === "참여 취소" ? (
+                      <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                        불가피한 사유로 당일 취소하는 경우, 크루브 카톡방과 강사님께 연락 남겨주세요.
+                        당일 취소 시 회비는 사용한 것으로 처리됩니다.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="py-8 text-center text-sm text-zinc-400">
                 상세 정보를 불러오지 못했습니다.
               </div>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {isEditClassOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
+          <button
+            type="button"
+            onClick={() => setIsEditClassOpen(false)}
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            aria-label="클래스 수정 닫기"
+          />
+          <div className="relative z-10 w-full max-w-md rounded-[1.5rem] border border-white/10 bg-zinc-950/90 p-5 shadow-[0_30px_90px_rgba(0,0,0,0.65)]">
+            <form className="space-y-3" onSubmit={handleSubmitEditClass}>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditClassType("정규")}
+                  className={[
+                    "rounded-full px-4.5 py-2.5 text-base border transition",
+                    editClassType === "정규"
+                      ? "border-fuchsia-400/60 bg-fuchsia-500/10 text-fuchsia-200 font-bold"
+                      : "border-white/10 bg-white/5 text-zinc-200 font-normal",
+                  ].join(" ")}
+                >
+                  정규
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditClassType("품앗이")}
+                  className={[
+                    "rounded-full px-4.5 py-2.5 text-base border transition",
+                    editClassType === "품앗이"
+                      ? "border-cyan-400/60 bg-cyan-500/10 text-cyan-200 font-bold"
+                      : "border-white/10 bg-white/5 text-zinc-200 font-normal",
+                  ].join(" ")}
+                >
+                  품앗이
+                </button>
+              </div>
+              <input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} className="w-full rounded-xl bg-zinc-800/60 border border-white/10 px-4 py-3 text-zinc-50" />
+              <input type="time" value={editTime} onChange={(e) => setEditTime(e.target.value)} className="w-full rounded-xl bg-zinc-800/60 border border-white/10 px-4 py-3 text-zinc-50" />
+              {editClassType === "정규" ? (
+                <div className="rounded-xl border border-white/10 bg-zinc-800/40 px-4 py-3">
+                  <label className="flex items-center gap-2 text-sm text-zinc-200">
+                    <input
+                      type="checkbox"
+                      checked={editIsFirstComeOpen}
+                      onChange={(e) => setEditIsFirstComeOpen(e.target.checked)}
+                    />
+                    선착순신청
+                  </label>
+                  {editIsFirstComeOpen ? (
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <input type="date" value={editOpenDate} onChange={(e) => setEditOpenDate(e.target.value)} className="w-full rounded-xl bg-zinc-800/60 border border-white/10 px-3 py-2 text-zinc-50" />
+                      <input type="time" value={editOpenTime} onChange={(e) => setEditOpenTime(e.target.value)} className="w-full rounded-xl bg-zinc-800/60 border border-white/10 px-3 py-2 text-zinc-50" />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              <input value={editClassName} onChange={(e) => setEditClassName(e.target.value)} placeholder="클래스명" className="w-full rounded-xl bg-zinc-800/60 border border-white/10 px-4 py-3 text-zinc-50" />
+              <textarea rows={3} value={editDescription} onChange={(e) => setEditDescription(e.target.value)} placeholder="클래스설명" className="w-full resize-none rounded-xl bg-zinc-800/60 border border-white/10 px-4 py-3 text-zinc-50" />
+              <input
+                type="text"
+                inputMode="numeric"
+                value={editMaxParticipants}
+                disabled
+                aria-label="최대 모집 인원 (수정 불가)"
+                className="w-full rounded-xl bg-white/20 border border-white/30 px-4 py-3 text-zinc-100 disabled:cursor-not-allowed"
+              />
+              <input value={editYoutubeUrl} onChange={(e) => setEditYoutubeUrl(e.target.value)} placeholder="유튜브 링크" className="w-full rounded-xl bg-zinc-800/60 border border-white/10 px-4 py-3 text-zinc-50" />
+              <button type="submit" disabled={isEditClassSubmitting} className="w-full rounded-xl bg-blue-500 px-4 py-3 text-sm font-extrabold text-white">
+                {isEditClassSubmitting ? "수정 중..." : "수정 저장"}
+              </button>
+            </form>
           </div>
         </div>
       ) : null}
@@ -871,34 +1243,56 @@ export default function HomePage() {
             className="absolute inset-0 bg-black/70 backdrop-blur-sm"
             aria-label="클래스 개설 닫기"
           />
-          <div className="relative z-10 w-full max-w-md rounded-[1.5rem] border border-white/10 bg-zinc-950/90 p-5 shadow-[0_30px_90px_rgba(0,0,0,0.65)]">
-            <form className="space-y-3" onSubmit={handleSubmitAddClass}>
+          <div className="relative z-10 w-full max-w-md max-h-[78dvh] overflow-hidden rounded-[1.5rem] border border-white/10 bg-zinc-950/90 p-5 shadow-[0_30px_90px_rgba(0,0,0,0.65)]">
+            <form className="space-y-3 max-h-[calc(78dvh-2.5rem)] overflow-y-auto px-1" onSubmit={handleSubmitAddClass}>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setNewClassType("품앗이")}
-                  className={[
-                    "rounded-full px-4.5 py-2.5 text-base border transition",
-                    newClassType === "품앗이"
-                      ? "border-fuchsia-400/60 bg-fuchsia-500/10 text-fuchsia-200 font-bold"
-                      : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10 font-normal",
-                  ].join(" ")}
-                >
-                  품앗이
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewClassType("정규")}
-                  disabled={!["head", "manager"].includes(currentRole ?? "")}
-                  className={[
-                    "rounded-full px-4.5 py-2.5 text-base border transition disabled:opacity-40 disabled:cursor-not-allowed",
-                    newClassType === "정규"
-                      ? "border-fuchsia-400/60 bg-fuchsia-500/10 text-fuchsia-200 font-bold"
-                      : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10 font-normal",
-                  ].join(" ")}
-                >
-                  정규
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewClassType("정규")}
+                    disabled={!["head", "manager"].includes(currentRole ?? "")}
+                    className={[
+                      "rounded-full px-4.5 py-2.5 text-base border transition disabled:opacity-40 disabled:cursor-not-allowed",
+                      newClassType === "정규"
+                        ? "border-fuchsia-400/60 bg-fuchsia-500/10 text-fuchsia-200 font-bold"
+                        : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10 font-normal",
+                    ].join(" ")}
+                  >
+                    정규
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewClassType("품앗이");
+                      setIsPoomasiToastVisible(true);
+                      if (poomasiToastTimerRef.current) {
+                        window.clearTimeout(poomasiToastTimerRef.current);
+                      }
+                      poomasiToastTimerRef.current = window.setTimeout(() => {
+                        setIsPoomasiToastVisible(false);
+                        poomasiToastTimerRef.current = null;
+                      }, 1800);
+                    }}
+                    className={[
+                      "rounded-full px-4.5 py-2.5 text-base border transition",
+                      newClassType === "품앗이"
+                        ? "border-cyan-400/60 bg-cyan-500/10 text-cyan-200 font-bold"
+                        : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10 font-normal",
+                    ].join(" ")}
+                  >
+                    품앗이
+                  </button>
+                  <div className="relative min-h-[34px]">
+                    {isPoomasiToastVisible ? (
+                      <>
+                        <div className="rounded-lg border border-zinc-600/80 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-200">
+                          감사비 4만원 지급🫶🏻
+                        </div>
+                        <span className="absolute left-[-5px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rotate-45 border-l border-b border-zinc-600/80 bg-zinc-800" />
+                      </>
+                    ) : null}
+                  </div>
+                </div>
               </div>
               <div ref={calendarDropdownRef} className="relative">
                 <button
