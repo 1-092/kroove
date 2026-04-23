@@ -27,6 +27,7 @@ type DbClassRow = {
 
 type BookingRow = {
   classId?: string;
+  classData?: DbClassRow;
   myStatus?: "completed" | "pending" | null;
   applicantLdaps?: string[];
   pendingLdaps?: string[];
@@ -208,7 +209,6 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
   const [selectedClass, setSelectedClass] = useState<ClassCard | null>(null);
-  const [isModalLoading, setIsModalLoading] = useState(false);
   const [applicantLdaps, setApplicantLdaps] = useState<string[]>([]);
   const [pendingLdaps, setPendingLdaps] = useState<string[]>([]);
   const [isApplicantsLoading, setIsApplicantsLoading] = useState(false);
@@ -406,31 +406,6 @@ export default function HomePage() {
     void fetchClasses();
   }, []);
 
-  useEffect(() => {
-    if (!selectedClassId) return;
-
-    const fetchClassDetail = async () => {
-      setIsModalLoading(true);
-      const { data, error } = await supabase
-        .from("classes")
-        .select("*")
-        .eq("id", selectedClassId)
-        .single();
-
-      if (error || !data) {
-        console.error("class detail fetch error:", error?.message);
-        setSelectedClass(null);
-        setIsModalLoading(false);
-        return;
-      }
-
-      setSelectedClass(mapRowToCard(data as DbClassRow));
-      setIsModalLoading(false);
-    };
-
-    void fetchClassDetail();
-  }, [selectedClassId]);
-
   const fetchBookingState = async (classId: string) => {
     setIsApplicantsLoading(true);
     setIsBookingStateLoading(true);
@@ -452,6 +427,9 @@ export default function HomePage() {
 
     setApplicantLdaps(result.applicantLdaps ?? []);
     setPendingLdaps(result.pendingLdaps ?? []);
+    if (result.classData) {
+      setSelectedClass(mapRowToCard(result.classData));
+    }
     setMyBookingStatus(result.myStatus ?? null);
     setMyBookingByClass((prev) => {
       const next = { ...prev };
@@ -508,6 +486,9 @@ export default function HomePage() {
     setBookingMessage(null);
     setApplicantLdaps(result.applicantLdaps ?? []);
     setPendingLdaps(result.pendingLdaps ?? []);
+    if (result.classData) {
+      setSelectedClass(mapRowToCard(result.classData));
+    }
     setMyBookingStatus(result.myStatus ?? null);
     setMyBookingByClass((prev) => {
       const next = { ...prev };
@@ -858,7 +839,15 @@ export default function HomePage() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setSelectedClassId(item.id)}
+                  onClick={() => {
+                    setSelectedClass(item);
+                    setApplicantLdaps([]);
+                    setPendingLdaps([]);
+                    setMyBookingStatus(null);
+                    setBookingMessage(null);
+                    setIsBookingStateLoading(true);
+                    setSelectedClassId(item.id);
+                  }}
                   className="w-full text-left rounded-2xl border border-white/10 bg-zinc-900/40 shadow-[0_18px_50px_rgba(0,0,0,0.35)] p-4"
                 >
                   <div className="flex gap-3">
@@ -989,7 +978,7 @@ export default function HomePage() {
           />
 
           <div className="relative z-10 w-full max-w-lg rounded-[1.5rem] border border-white/10 bg-zinc-950/90 shadow-[0_30px_90px_rgba(0,0,0,0.65)] p-5 sm:p-6">
-            {isModalLoading || isBookingStateLoading ? (
+            {isBookingStateLoading ? (
               <div className="flex flex-col items-center justify-center py-10">
                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-600 border-t-fuchsia-400" />
                 <p className="mt-3 text-sm text-zinc-400">로딩 중...</p>

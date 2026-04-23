@@ -8,6 +8,25 @@ type BookingStatus = "completed" | "pending" | "canceled";
 type BookingRow = {
   member_id?: string | number | null;
   status?: BookingStatus | null;
+  created_at?: string | null;
+  members?: { ldap?: string | null } | Array<{ ldap?: string | null }> | null;
+};
+
+type ClassWithBookingsRow = {
+  id?: string | number | null;
+  class_type?: string | null;
+  created_who?: string | null;
+  open_at?: string | null;
+  date?: string | null;
+  time?: string | null;
+  title?: string | null;
+  description?: string | null;
+  max_participants?: number | null;
+  current_participants?: number | null;
+  participants?: string[] | null;
+  video_id?: string | null;
+  youtube_url?: string | null;
+  bookings?: BookingRow[] | null;
 };
 
 async function sendKakaoworkBookingCompletedMessage(params: {
@@ -120,74 +139,58 @@ async function getBookingState(
   classId: string,
   memberId: string | number
 ) {
-  const { data: bookingRows, error: bookingError } = await supabase
-    .from("bookings")
-    .select("member_id, status, created_at")
-    .eq("class_id", classId)
-    .order("created_at", { ascending: true });
-  if (bookingError) throw new Error(bookingError.message);
-
-  const rows = (bookingRows ?? []) as BookingRow[];
-  const completedRows = rows.filter((row) => row.status === "completed");
-  const completedIds = completedRows
-    .map((row) => row.member_id)
-    .filter((id): id is string | number => Boolean(id));
-  const pendingRows = rows.filter((row) => row.status === "pending");
-  const pendingIds = pendingRows
-    .map((row) => row.member_id)
-    .filter((id): id is string | number => Boolean(id));
-
-  const { data: classData, error: classError } = await supabase
+  const { data, error } = await supabase
     .from("classes")
-    .select("max_participants")
+    .select(
+      "id, class_type, created_who, open_at, date, time, title, description, max_participants, current_participants, youtube_url, bookings(member_id, status, created_at, members(ldap))"
+    )
     .eq("id", classId)
     .maybeSingle();
-  if (classError) throw new Error(classError.message);
-  const maxParticipants = Number((classData as { max_participants?: number | null } | null)?.max_participants ?? 0);
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("class not found");
 
-  let applicantLdaps: string[] = [];
-  let pendingLdaps: string[] = [];
-  if (completedIds.length > 0) {
-    const { data: members, error: membersError } = await supabase
-      .from("members")
-      .select("id, ldap")
-      .in("id", completedIds);
-    if (membersError) throw new Error(membersError.message);
-    const ldapById = new Map(
-      ((members ?? []) as Array<{ id: string | number; ldap?: string | null }>).map((member) => [
-        String(member.id),
-        member.ldap ?? "",
-      ])
-    );
-    applicantLdaps = completedIds
-      .map((id) => ldapById.get(String(id)) ?? "")
-      .filter((ldap): ldap is string => Boolean(ldap));
-  }
-  if (pendingIds.length > 0) {
-    const { data: members, error: membersError } = await supabase
-      .from("members")
-      .select("id, ldap")
-      .in("id", pendingIds);
-    if (membersError) throw new Error(membersError.message);
-    const ldapById = new Map(
-      ((members ?? []) as Array<{ id: string | number; ldap?: string | null }>).map((member) => [
-        String(member.id),
-        member.ldap ?? "",
-      ])
-    );
-    pendingLdaps = pendingIds
-      .map((id) => ldapById.get(String(id)) ?? "")
-      .filter((ldap): ldap is string => Boolean(ldap));
-  }
+  const classData = data as ClassWithBookingsRow;
+  const rows = [...(classData.bookings ?? [])].sort((a, b) =>
+    String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))
+  );
+
+  const getBookingLdap = (row: BookingRow) => {
+    const membersValue = row.members;
+    if (Array.isArray(membersValue)) return membersValue[0]?.ldap ?? "";
+    return membersValue?.ldap ?? "";
+  };
+
+  const completedRows = rows.filter((row) => row.status === "completed");
+  const pendingRows = rows.filter((row) => row.status === "pending");
+
+  const applicantLdaps = completedRows
+    .map(getBookingLdap)
+    .filter((ldap): ldap is string => Boolean(ldap));
+  const pendingLdaps = pendingRows
+    .map(getBookingLdap)
+    .filter((ldap): ldap is string => Boolean(ldap));
 
   const mine = rows.find((row) => String(row.member_id) === String(memberId));
   const myStatus = mine?.status === "completed" || mine?.status === "pending" ? mine.status : null;
   return {
+    classData: {
+      id: classData.id,
+      class_type: classData.class_type,
+      created_who: classData.created_who,
+      open_at: classData.open_at,
+      date: classData.date,
+      time: classData.time,
+      title: classData.title,
+      description: classData.description,
+      max_participants: classData.max_participants,
+      current_participants: classData.current_participants,
+      youtube_url: classData.youtube_url,
+    },
     myStatus,
     applicantLdaps,
     pendingLdaps,
-    currentSeats: completedIds.length,
-    maxSeats: maxParticipants,
+    currentSeats: completedRows.length,
+    maxSeats: Number(classData.max_participants ?? 0),
   };
 }
 
