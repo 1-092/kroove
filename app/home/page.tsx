@@ -29,6 +29,7 @@ type BookingRow = {
   classId?: string;
   myStatus?: "completed" | "pending" | null;
   applicantLdaps?: string[];
+  pendingLdaps?: string[];
   currentSeats?: number;
   maxSeats?: number;
 };
@@ -209,6 +210,7 @@ export default function HomePage() {
   const [selectedClass, setSelectedClass] = useState<ClassCard | null>(null);
   const [isModalLoading, setIsModalLoading] = useState(false);
   const [applicantLdaps, setApplicantLdaps] = useState<string[]>([]);
+  const [pendingLdaps, setPendingLdaps] = useState<string[]>([]);
   const [isApplicantsLoading, setIsApplicantsLoading] = useState(false);
   const [isBookingStateLoading, setIsBookingStateLoading] = useState(false);
   const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
@@ -440,6 +442,7 @@ export default function HomePage() {
     const result = (await response.json()) as BookingRow & { message?: string };
     if (!response.ok) {
       setApplicantLdaps([]);
+      setPendingLdaps([]);
       setMyBookingStatus(null);
       setBookingMessage(result.message ?? "신청 상태를 불러오지 못했습니다.");
       setIsApplicantsLoading(false);
@@ -448,6 +451,7 @@ export default function HomePage() {
     }
 
     setApplicantLdaps(result.applicantLdaps ?? []);
+    setPendingLdaps(result.pendingLdaps ?? []);
     setMyBookingStatus(result.myStatus ?? null);
     setMyBookingByClass((prev) => {
       const next = { ...prev };
@@ -503,6 +507,7 @@ export default function HomePage() {
 
     setBookingMessage(null);
     setApplicantLdaps(result.applicantLdaps ?? []);
+    setPendingLdaps(result.pendingLdaps ?? []);
     setMyBookingStatus(result.myStatus ?? null);
     setMyBookingByClass((prev) => {
       const next = { ...prev };
@@ -930,7 +935,7 @@ export default function HomePage() {
                             <div className="h-20 w-28 rounded-xl border border-white/10 bg-gradient-to-br from-fuchsia-500/30 via-violet-500/25 to-cyan-400/25" />
                           )}
                           <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                            <span className="rounded-full bg-black/55 px-2 py-1 text-xs font-black text-white">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-xs leading-none font-black text-white">
                               ►
                             </span>
                           </span>
@@ -975,6 +980,7 @@ export default function HomePage() {
               setSelectedClassId(null);
               setSelectedClass(null);
               setApplicantLdaps([]);
+              setPendingLdaps([]);
               setBookingMessage(null);
               setMyBookingStatus(null);
               setIsBookingStateLoading(false);
@@ -1010,6 +1016,11 @@ export default function HomePage() {
                     <h2 className="mt-1 text-xl font-black tracking-tight">
                       {selectedClass.title}
                     </h2>
+                    {selectedClass.classType === "품앗이" && selectedClass.createdWho ? (
+                      <div className="mt-2 text-sm text-zinc-300">
+                        Host: {selectedClass.createdWho}
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="flex items-start gap-2 self-start">
@@ -1052,6 +1063,7 @@ export default function HomePage() {
                         setSelectedClassId(null);
                         setSelectedClass(null);
                         setApplicantLdaps([]);
+                        setPendingLdaps([]);
                         setBookingMessage(null);
                         setMyBookingStatus(null);
                         setIsBookingStateLoading(false);
@@ -1086,22 +1098,43 @@ export default function HomePage() {
                     ) : (
                       <div className="text-sm leading-relaxed text-zinc-200">
                         {applicantLdaps.map((ldap, idx) => (
-                          <span
-                            key={`${ldap}-${idx}`}
-                            className={
-                              ldap === currentLdap
-                                ? "font-extrabold text-fuchsia-300 underline underline-offset-2"
-                                : undefined
-                            }
-                          >
+                          <span key={`${ldap}-${idx}`}>
                             {idx > 0 ? ", " : null}
-                            {ldap}
+                            <span
+                              className={
+                                ldap === currentLdap
+                                  ? "font-extrabold text-fuchsia-300 underline underline-offset-2"
+                                  : undefined
+                              }
+                            >
+                              {ldap}
+                            </span>
                           </span>
                         ))}
                       </div>
                     )}
                   </div>
                 </div>
+
+                {pendingLdaps.length > 0 ? (
+                  <div className="mt-3 text-sm leading-relaxed text-zinc-300">
+                    대기자:{" "}
+                    {pendingLdaps.map((ldap, idx) => (
+                      <span key={`pending-${ldap}-${idx}`}>
+                        {idx > 0 ? ", " : null}
+                        <span
+                          className={
+                            ldap === currentLdap
+                              ? "font-extrabold text-fuchsia-300 underline underline-offset-2"
+                              : undefined
+                          }
+                        >
+                          {ldap}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
 
                 {selectedClass.youtubeUrl ? (
                   <a
@@ -1120,7 +1153,7 @@ export default function HomePage() {
                       <div className="h-44 w-full rounded-xl border border-white/10 bg-gradient-to-br from-fuchsia-500/30 via-violet-500/25 to-cyan-400/25" />
                     )}
                     <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                      <span className="rounded-full bg-black/55 px-3 py-1.5 text-sm font-black text-white">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-lg leading-none font-black text-white">
                         ►
                       </span>
                     </span>

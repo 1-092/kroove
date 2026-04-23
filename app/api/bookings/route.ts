@@ -10,6 +10,55 @@ type BookingRow = {
   status?: BookingStatus | null;
 };
 
+async function sendKakaoworkBookingCompletedMessage(params: {
+  ldap: string;
+  classTitle: string;
+  classDateTime: string;
+}) {
+  const botApiKey = process.env.KAKAOWORK_BOT_API_KEY;
+  if (!botApiKey) return;
+
+  const email = `${params.ldap}@kakaocorp.com`;
+  const headerText = "🔥 클래스 참여 신청 완료";
+
+  const payload = {
+    email,
+    text: headerText,
+    blocks: [
+      {
+        type: "header",
+        style: "blue",
+        text: headerText,
+      },
+      {
+        type: "text",
+        markdown: true,
+        text: `**${params.ldap}**님, [${params.classTitle}] 클래스 참여자에 추가되었습니다. ${params.classDateTime}에 만나요!`,
+      },
+      {
+        type: "button",
+        text: "확인하러가기",
+        action_type: "open_system_browser",
+        value: "https://kroove.vercel.app",
+      },
+    ],
+  };
+
+  const response = await fetch("https://api.kakaowork.com/v1/messages.send_by_email", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${botApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`KakaoWork API request failed (${response.status}): ${errorText}`);
+  }
+}
+
 function createAdminSupabaseClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -20,6 +69,24 @@ function createAdminSupabaseClient() {
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+}
+
+function formatClassDateTimeForMessage(dateValue?: string | null, timeValue?: string | null) {
+  const dateText = (dateValue ?? "").trim();
+  const timeText = (timeValue ?? "").trim();
+
+  const dateMatch = dateText.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const month = dateMatch ? Number(dateMatch[2]) : null;
+  const day = dateMatch ? Number(dateMatch[3]) : null;
+
+  const timeMatch = timeText.match(/^(\d{2}):(\d{2})/);
+  const hh = timeMatch ? timeMatch[1] : "00";
+  const mm = timeMatch ? timeMatch[2] : "00";
+
+  if (month && day) {
+    return `${month}월 ${day}일 ${hh}:${mm}`;
+  }
+  return `${hh}:${mm}`;
 }
 
 async function getSessionLdap() {
@@ -33,6 +100,19 @@ async function getMemberIdByLdap(supabase: ReturnType<typeof createAdminSupabase
   const { data, error } = await supabase.from("members").select("id").eq("ldap", ldap).maybeSingle();
   if (error || !data?.id) return null;
   return data.id as string | number;
+}
+
+async function getMemberLdapById(
+  supabase: ReturnType<typeof createAdminSupabaseClient>,
+  memberId: string | number
+) {
+  const { data, error } = await supabase
+    .from("members")
+    .select("ldap")
+    .eq("id", memberId)
+    .maybeSingle();
+  if (error) return null;
+  return (data as { ldap?: string | null } | null)?.ldap ?? null;
 }
 
 async function getBookingState(
@@ -52,6 +132,10 @@ async function getBookingState(
   const completedIds = completedRows
     .map((row) => row.member_id)
     .filter((id): id is string | number => Boolean(id));
+  const pendingRows = rows.filter((row) => row.status === "pending");
+  const pendingIds = pendingRows
+    .map((row) => row.member_id)
+    .filter((id): id is string | number => Boolean(id));
 
   const { data: classData, error: classError } = await supabase
     .from("classes")
@@ -62,6 +146,7 @@ async function getBookingState(
   const maxParticipants = Number((classData as { max_participants?: number | null } | null)?.max_participants ?? 0);
 
   let applicantLdaps: string[] = [];
+  let pendingLdaps: string[] = [];
   if (completedIds.length > 0) {
     const { data: members, error: membersError } = await supabase
       .from("members")
@@ -78,12 +163,29 @@ async function getBookingState(
       .map((id) => ldapById.get(String(id)) ?? "")
       .filter((ldap): ldap is string => Boolean(ldap));
   }
+  if (pendingIds.length > 0) {
+    const { data: members, error: membersError } = await supabase
+      .from("members")
+      .select("id, ldap")
+      .in("id", pendingIds);
+    if (membersError) throw new Error(membersError.message);
+    const ldapById = new Map(
+      ((members ?? []) as Array<{ id: string | number; ldap?: string | null }>).map((member) => [
+        String(member.id),
+        member.ldap ?? "",
+      ])
+    );
+    pendingLdaps = pendingIds
+      .map((id) => ldapById.get(String(id)) ?? "")
+      .filter((ldap): ldap is string => Boolean(ldap));
+  }
 
   const mine = rows.find((row) => String(row.member_id) === String(memberId));
   const myStatus = mine?.status === "completed" || mine?.status === "pending" ? mine.status : null;
   return {
     myStatus,
     applicantLdaps,
+    pendingLdaps,
     currentSeats: completedIds.length,
     maxSeats: maxParticipants,
   };
@@ -126,11 +228,15 @@ export async function POST(request: Request) {
 
     const { data: classData, error: classError } = await supabase
       .from("classes")
-      .select("max_participants")
+      .select("max_participants, title, date, time")
       .eq("id", classId)
       .maybeSingle();
     if (classError) return NextResponse.json({ message: classError.message }, { status: 500 });
     const maxSeats = Number((classData as { max_participants?: number | null } | null)?.max_participants ?? 0);
+    const classTitle = (classData as { title?: string | null } | null)?.title ?? "제목 없음 클래스";
+    const classDate = (classData as { date?: string | null } | null)?.date ?? "";
+    const classTime = (classData as { time?: string | null } | null)?.time ?? "";
+    const classDateTime = formatClassDateTimeForMessage(classDate, classTime);
 
     const { data: existingRows, error: existingError } = await supabase
       .from("bookings")
@@ -169,6 +275,19 @@ export async function POST(request: Request) {
             .eq("class_id", classId)
             .eq("member_id", nextMemberId);
           if (promoteError) return NextResponse.json({ message: promoteError.message }, { status: 500 });
+
+          const promotedLdap = await getMemberLdapById(supabase, nextMemberId);
+          if (promotedLdap) {
+            try {
+              await sendKakaoworkBookingCompletedMessage({
+                ldap: promotedLdap,
+                classTitle,
+                classDateTime,
+              });
+            } catch (notifyError) {
+              console.error("[kakaowork] failed to send promoted booking completion message:", notifyError);
+            }
+          }
         }
       }
       message = "신청이 취소되었습니다.";
@@ -188,6 +307,17 @@ export async function POST(request: Request) {
         if (insertError) return NextResponse.json({ message: insertError.message }, { status: 500 });
       }
       message = nextStatus === "completed" ? "클래스 참여가 완료되었습니다." : "대기 신청이 완료되었습니다.";
+      if (nextStatus === "completed") {
+        try {
+          await sendKakaoworkBookingCompletedMessage({
+            ldap,
+            classTitle,
+            classDateTime,
+          });
+        } catch (notifyError) {
+          console.error("[kakaowork] failed to send booking completion message:", notifyError);
+        }
+      }
     }
 
     const state = await getBookingState(supabase, classId, memberId);
