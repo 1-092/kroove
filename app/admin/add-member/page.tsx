@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { useSessionGuard } from "@/src/hooks/useSessionGuard";
 
 type MemberRole = "member" | "manager" | "head";
 type CrewMember = {
@@ -31,28 +32,18 @@ export default function AddMemberPage() {
   const [touchingMemberId, setTouchingMemberId] = useState<string | null>(null);
   const [revealedWithdrawMemberId, setRevealedWithdrawMemberId] = useState<string | null>(null);
 
-  useEffect(() => {
-    const checkRole = async () => {
-      const response = await fetch("/api/auth/me", { method: "GET" });
-      if (!response.ok) {
+  useSessionGuard({
+    onAuthorized: (member) => {
+      if (!member.ldap || !["head", "manager"].includes(member.role ?? "")) {
         router.replace("/home");
         return;
       }
-      const json = (await response.json()) as {
-        member?: { ldap?: string | null; role?: string | null };
-      };
-      const ldap = json.member?.ldap ?? "";
-      const currentRole = json.member?.role ?? "";
-      if (!ldap || !["head", "manager"].includes(currentRole)) {
-        router.replace("/home");
-        return;
-      }
-
       setIsRoleChecking(false);
-    };
-
-    void checkRole();
-  }, [router]);
+    },
+    onUnauthorized: () => {
+      setIsRoleChecking(true);
+    },
+  });
 
   useEffect(() => {
     if (isRoleChecking) return;

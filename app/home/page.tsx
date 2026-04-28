@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/src/lib/supabase";
+import { useSessionGuard } from "@/src/hooks/useSessionGuard";
 
 type ClassType = "정규" | "품앗이";
 type FilterKey = "all" | "my" | ClassType;
@@ -284,21 +285,16 @@ export default function HomePage() {
     }, 1800);
   }, [isAddClassOpen, newClassType]);
 
-  useEffect(() => {
-    const fetchMe = async () => {
-      const response = await fetch("/api/auth/me", { method: "GET" });
-      if (!response.ok) {
-        setCurrentLdap("");
-        setCurrentRole(null);
-        return;
-      }
-      const json = (await response.json()) as AuthMeResponse;
-      setCurrentLdap(json.member?.ldap ?? "");
-      setCurrentRole(json.member?.role ?? null);
-    };
-
-    void fetchMe();
-  }, []);
+  useSessionGuard({
+    onAuthorized: (member) => {
+      setCurrentLdap(member.ldap ?? "");
+      setCurrentRole(member.role ?? null);
+    },
+    onUnauthorized: () => {
+      setCurrentLdap("");
+      setCurrentRole(null);
+    },
+  });
 
   useEffect(() => {
     if (!isTimeDropdownOpen) return;
@@ -573,9 +569,10 @@ export default function HomePage() {
     !isAfterClassTime;
 
   const handleLogout = async () => {
-    await fetch("/api/auth/session", { method: "DELETE" });
+    await fetch("/api/auth/session", { method: "DELETE", cache: "no-store" });
     await supabase.auth.signOut();
-    router.push("/");
+    router.replace("/");
+    router.refresh();
   };
 
   const handleSubmitAddClass = async (e: FormEvent<HTMLFormElement>) => {

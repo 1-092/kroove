@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { supabase } from "@/src/lib/supabase";
+import { useSessionGuard } from "@/src/hooks/useSessionGuard";
 
 /** 로그인 화면 mock 초기 패스워드와 동일해야 함 */
 const INITIAL_PASSWORD = "0000";
@@ -13,6 +14,7 @@ export default function ChangePasswordPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { isSessionChecking } = useSessionGuard();
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -81,6 +83,11 @@ export default function ChangePasswordPage() {
 
   return (
     <div className="min-h-dvh bg-black text-zinc-50 px-3.5 py-9 flex items-center justify-center">
+      {isSessionChecking ? (
+        <div className="w-full max-w-md rounded-[1.8rem] border border-white/10 bg-zinc-900/60 p-6 text-center text-sm text-zinc-400">
+          로그인 상태 확인 중...
+        </div>
+      ) : (
       <div className="relative w-full max-w-md">
         <div className="absolute inset-0 -z-10 rounded-[1.8rem] bg-[radial-gradient(ellipse_at_top,_rgba(236,72,153,0.20),transparent_55%),radial-gradient(ellipse_at_bottom,_rgba(34,211,238,0.14),transparent_50%)]" />
 
@@ -145,6 +152,7 @@ export default function ChangePasswordPage() {
           </form>
         </div>
       </div>
+      )}
     </div>
   );
 }

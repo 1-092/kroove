@@ -23,11 +23,13 @@ type ClassWithBookingsRow = {
   description?: string | null;
   max_participants?: number | null;
   current_participants?: number | null;
-  participants?: string[] | null;
-  video_id?: string | null;
   youtube_url?: string | null;
   bookings?: BookingRow[] | null;
 };
+
+function nowMs() {
+  return Number(process.hrtime.bigint() / 1000000n);
+}
 
 async function sendKakaoworkBookingCompletedMessage(params: {
   ldap: string;
@@ -195,38 +197,67 @@ async function getBookingState(
 }
 
 export async function GET(request: Request) {
+  const startMs = nowMs();
+  const marks: Record<string, number> = {};
   try {
+    const mark = (name: string) => {
+      marks[name] = nowMs() - startMs;
+    };
+
     const ldap = await getSessionLdap();
+    mark("session_checked");
     if (!ldap) return NextResponse.json({ message: "unauthorized" }, { status: 401 });
 
     const url = new URL(request.url);
     const classId = url.searchParams.get("classId")?.trim();
+    mark("query_parsed");
     if (!classId) return NextResponse.json({ message: "classId is required" }, { status: 400 });
 
     const supabase = createAdminSupabaseClient();
     const memberId = await getMemberIdByLdap(supabase, ldap);
+    mark("member_loaded");
     if (!memberId) return NextResponse.json({ message: "member not found" }, { status: 404 });
 
     const state = await getBookingState(supabase, classId, memberId);
+    mark("booking_state_loaded");
     await supabase.from("classes").update({ current_participants: state.currentSeats }).eq("id", classId);
-    return NextResponse.json(state, { status: 200 });
+    mark("participants_synced");
+    const totalMs = nowMs() - startMs;
+    console.info(
+      `[bookings:get] classId=${classId} total=${totalMs}ms session=${marks.session_checked ?? 0}ms member=${(marks.member_loaded ?? totalMs) - (marks.query_parsed ?? 0)}ms state=${(marks.booking_state_loaded ?? totalMs) - (marks.member_loaded ?? 0)}ms sync=${(marks.participants_synced ?? totalMs) - (marks.booking_state_loaded ?? 0)}ms`
+    );
+    return NextResponse.json(state, {
+      status: 200,
+      headers: { "Server-Timing": `total;dur=${totalMs}` },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+    const totalMs = nowMs() - startMs;
+    console.error(`[bookings:get] failed after ${totalMs}ms`, message);
     return NextResponse.json({ message }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
+  const startMs = nowMs();
+  const marks: Record<string, number> = {};
   try {
+    const mark = (name: string) => {
+      marks[name] = nowMs() - startMs;
+    };
+
     const ldap = await getSessionLdap();
+    mark("session_checked");
     if (!ldap) return NextResponse.json({ message: "unauthorized" }, { status: 401 });
 
     const body = (await request.json()) as { classId?: string };
     const classId = body.classId?.trim();
+    mark("body_parsed");
     if (!classId) return NextResponse.json({ message: "classId is required" }, { status: 400 });
 
     const supabase = createAdminSupabaseClient();
     const memberId = await getMemberIdByLdap(supabase, ldap);
+    mark("member_loaded");
     if (!memberId) return NextResponse.json({ message: "member not found" }, { status: 404 });
 
     const { data: classData, error: classError } = await supabase
@@ -234,6 +265,7 @@ export async function POST(request: Request) {
       .select("max_participants, title, date, time")
       .eq("id", classId)
       .maybeSingle();
+    mark("class_loaded");
     if (classError) return NextResponse.json({ message: classError.message }, { status: 500 });
     const maxSeats = Number((classData as { max_participants?: number | null } | null)?.max_participants ?? 0);
     const classTitle = (classData as { title?: string | null } | null)?.title ?? "제목 없음 클래스";
@@ -246,6 +278,7 @@ export async function POST(request: Request) {
       .select("member_id, status, created_at")
       .eq("class_id", classId)
       .order("created_at", { ascending: true });
+    mark("existing_bookings_loaded");
     if (existingError) return NextResponse.json({ message: existingError.message }, { status: 500 });
 
     const rows = (existingRows ?? []) as BookingRow[];
@@ -259,6 +292,7 @@ export async function POST(request: Request) {
         .update({ status: "canceled" })
         .eq("class_id", classId)
         .eq("member_id", memberId);
+      mark("booking_canceled");
       if (cancelError) return NextResponse.json({ message: cancelError.message }, { status: 500 });
 
       if (myExisting.status === "completed") {
@@ -269,6 +303,7 @@ export async function POST(request: Request) {
           .eq("status", "pending")
           .order("created_at", { ascending: true })
           .limit(1);
+        mark("next_pending_loaded");
         if (pendingError) return NextResponse.json({ message: pendingError.message }, { status: 500 });
         const nextMemberId = pendingRows?.[0]?.member_id;
         if (nextMemberId) {
@@ -277,6 +312,7 @@ export async function POST(request: Request) {
             .update({ status: "completed" })
             .eq("class_id", classId)
             .eq("member_id", nextMemberId);
+          mark("pending_promoted");
           if (promoteError) return NextResponse.json({ message: promoteError.message }, { status: 500 });
 
           const promotedLdap = await getMemberLdapById(supabase, nextMemberId);
@@ -287,6 +323,7 @@ export async function POST(request: Request) {
                 classTitle,
                 classDateTime,
               });
+              mark("promoted_notification_sent");
             } catch (notifyError) {
               console.error("[kakaowork] failed to send promoted booking completion message:", notifyError);
             }
@@ -302,11 +339,13 @@ export async function POST(request: Request) {
           .update({ status: nextStatus })
           .eq("class_id", classId)
           .eq("member_id", memberId);
+        mark("booking_updated");
         if (updateError) return NextResponse.json({ message: updateError.message }, { status: 500 });
       } else {
         const { error: insertError } = await supabase
           .from("bookings")
           .insert({ class_id: classId, member_id: memberId, status: nextStatus });
+        mark("booking_inserted");
         if (insertError) return NextResponse.json({ message: insertError.message }, { status: 500 });
       }
       message = nextStatus === "completed" ? "클래스 참여가 완료되었습니다." : "대기 신청이 완료되었습니다.";
@@ -317,6 +356,7 @@ export async function POST(request: Request) {
             classTitle,
             classDateTime,
           });
+          mark("self_notification_sent");
         } catch (notifyError) {
           console.error("[kakaowork] failed to send booking completion message:", notifyError);
         }
@@ -324,15 +364,23 @@ export async function POST(request: Request) {
     }
 
     const state = await getBookingState(supabase, classId, memberId);
+    mark("booking_state_loaded");
     const { error: syncError } = await supabase
       .from("classes")
       .update({ current_participants: state.currentSeats })
       .eq("id", classId);
+    mark("participants_synced");
     if (syncError) return NextResponse.json({ message: syncError.message }, { status: 500 });
 
+    const totalMs = nowMs() - startMs;
+    console.info(
+      `[bookings:post] classId=${classId} total=${totalMs}ms session=${marks.session_checked ?? 0}ms member=${(marks.member_loaded ?? totalMs) - (marks.body_parsed ?? 0)}ms class=${(marks.class_loaded ?? totalMs) - (marks.member_loaded ?? 0)}ms existing=${(marks.existing_bookings_loaded ?? totalMs) - (marks.class_loaded ?? 0)}ms mutate=${(marks.booking_state_loaded ?? totalMs) - (marks.existing_bookings_loaded ?? 0)}ms sync=${(marks.participants_synced ?? totalMs) - (marks.booking_state_loaded ?? 0)}ms`
+    );
     return NextResponse.json({ message, ...state }, { status: 200 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+    const totalMs = nowMs() - startMs;
+    console.error(`[bookings:post] failed after ${totalMs}ms`, message);
     return NextResponse.json({ message }, { status: 500 });
   }
 }
