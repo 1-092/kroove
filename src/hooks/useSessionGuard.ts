@@ -22,6 +22,13 @@ export function useSessionGuard(options?: UseSessionGuardOptions) {
   const router = useRouter();
   const redirectTo = options?.redirectTo ?? "/";
   const [isSessionChecking, setIsSessionChecking] = useState(true);
+  const redirectNow = useCallback(() => {
+    if (window.location.pathname !== redirectTo) {
+      window.location.replace(redirectTo);
+    } else {
+      router.replace(redirectTo);
+    }
+  }, [redirectTo, router]);
 
   const validateSession = useCallback(async () => {
     const response = await fetch("/api/auth/me", {
@@ -32,7 +39,7 @@ export function useSessionGuard(options?: UseSessionGuardOptions) {
     if (!response.ok) {
       options?.onUnauthorized?.();
       setIsSessionChecking(false);
-      router.replace(redirectTo);
+      redirectNow();
       return;
     }
 
@@ -42,13 +49,13 @@ export function useSessionGuard(options?: UseSessionGuardOptions) {
     if (!member.ldap) {
       options?.onUnauthorized?.();
       setIsSessionChecking(false);
-      router.replace(redirectTo);
+      redirectNow();
       return;
     }
 
     options?.onAuthorized?.(member);
     setIsSessionChecking(false);
-  }, [options, redirectTo, router]);
+  }, [options, redirectNow]);
 
   useEffect(() => {
     const onFocus = () => {
