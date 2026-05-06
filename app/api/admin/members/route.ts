@@ -60,6 +60,7 @@ type PatchBody = {
   memberId?: string;
   role?: "member" | "manager" | "head";
   status?: "active" | "withdrawn";
+  resetPassword?: boolean;
 };
 
 export async function PATCH(request: Request) {
@@ -90,9 +91,69 @@ export async function PATCH(request: Request) {
     const memberId = body.memberId?.trim();
     const role = body.role;
     const status = body.status;
+    const resetPassword = Boolean(body.resetPassword);
 
-    if (!memberId || (!role && !status)) {
+    if (!memberId || (!role && !status && !resetPassword)) {
       return NextResponse.json({ message: "invalid payload" }, { status: 400 });
+    }
+
+    if (resetPassword) {
+      const { data: memberRow, error: memberLookupError } = await supabase
+        .from("members")
+        .select("id, ldap")
+        .eq("id", memberId)
+        .maybeSingle();
+
+      if (memberLookupError || !memberRow?.ldap) {
+        return NextResponse.json({ message: "member not found" }, { status: 404 });
+      }
+
+      let targetAuthUserId = memberId;
+      let { error: authError } = await supabase.auth.admin.updateUserById(targetAuthUserId, {
+        password: "000000",
+      });
+
+      if (authError) {
+        const targetEmail = `${memberRow.ldap}@kakaocorp.com`;
+        const { data: authListData, error: authListError } = await supabase.auth.admin.listUsers();
+        if (authListError) {
+          return NextResponse.json({ message: authError.message }, { status: 500 });
+        }
+
+        const matchedAuthUser = authListData?.users?.find(
+          (user) => (user.email ?? "").toLowerCase() === targetEmail.toLowerCase()
+        );
+
+        if (!matchedAuthUser?.id) {
+          return NextResponse.json({ message: authError.message }, { status: 500 });
+        }
+
+        targetAuthUserId = matchedAuthUser.id;
+        const secondTry = await supabase.auth.admin.updateUserById(targetAuthUserId, {
+          password: "000000",
+        });
+        authError = secondTry.error;
+      }
+
+      if (authError) {
+        return NextResponse.json({ message: authError.message }, { status: 500 });
+      }
+
+      const { data, error } = await supabase
+        .from("members")
+        .update({ is_initial_password: true })
+        .eq("id", memberId)
+        .select("id, ldap, name, role, status")
+        .maybeSingle();
+
+      if (error) {
+        return NextResponse.json({ message: error.message }, { status: 500 });
+      }
+      if (!data) {
+        return NextResponse.json({ message: "member not found" }, { status: 404 });
+      }
+
+      return NextResponse.json({ member: data }, { status: 200 });
     }
 
     const updates: { role?: "member" | "manager" | "head"; status?: "active" | "withdrawn" } = {};

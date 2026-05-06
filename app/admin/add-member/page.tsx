@@ -28,9 +28,13 @@ export default function AddMemberPage() {
   const [isMembersLoading, setIsMembersLoading] = useState(true);
   const [openedRoleMenuMemberId, setOpenedRoleMenuMemberId] = useState<string | null>(null);
   const [updatingRoleMemberId, setUpdatingRoleMemberId] = useState<string | null>(null);
+  const [resettingPasswordMemberId, setResettingPasswordMemberId] = useState<string | null>(null);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [touchingMemberId, setTouchingMemberId] = useState<string | null>(null);
+  const [mouseStartX, setMouseStartX] = useState<number | null>(null);
+  const [mouseMemberId, setMouseMemberId] = useState<string | null>(null);
   const [revealedWithdrawMemberId, setRevealedWithdrawMemberId] = useState<string | null>(null);
+  const [revealedResetMemberId, setRevealedResetMemberId] = useState<string | null>(null);
 
   useSessionGuard({
     onAuthorized: (member) => {
@@ -171,6 +175,49 @@ export default function AddMemberPage() {
 
     setMembers((prev) => prev.filter((member) => member.id !== memberId));
     setRevealedWithdrawMemberId(null);
+    setRevealedResetMemberId(null);
+  };
+
+  const handleResetPassword = async (memberId: string) => {
+    if (resettingPasswordMemberId) return;
+    const ok = window.confirm("비밀번호를 초기화 할까요?");
+    if (!ok) return;
+
+    setResettingPasswordMemberId(memberId);
+    const response = await fetch("/api/admin/members", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ memberId, resetPassword: true }),
+    });
+    const result = (await response.json()) as { message?: string };
+    if (!response.ok) {
+      alert(result.message ?? "비밀번호 초기화에 실패했습니다.");
+      setResettingPasswordMemberId(null);
+      return;
+    }
+
+    alert("비밀번호가 초기화 되었습니다.");
+    setRevealedResetMemberId(null);
+    setRevealedWithdrawMemberId(null);
+    setResettingPasswordMemberId(null);
+  };
+
+  const applySwipeState = (memberId: string, deltaX: number) => {
+    if (deltaX < -40) {
+      setRevealedWithdrawMemberId(memberId);
+      setRevealedResetMemberId(null);
+    } else if (deltaX > 40) {
+      setRevealedResetMemberId(memberId);
+      setRevealedWithdrawMemberId(null);
+    } else {
+      setRevealedWithdrawMemberId(null);
+      setRevealedResetMemberId(null);
+    }
+  };
+
+  const isActionTarget = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return false;
+    return Boolean(target.closest("[data-swipe-action='true']"));
   };
 
   return (
@@ -275,24 +322,74 @@ export default function AddMemberPage() {
                     openedRoleMenuMemberId === member.id ? "overflow-visible z-30" : "overflow-hidden",
                   ].join(" ")}
                   onTouchStart={(e) => {
+                    if (isActionTarget(e.target)) return;
                     setTouchStartX(e.touches[0]?.clientX ?? null);
                     setTouchingMemberId(member.id);
                   }}
                   onTouchEnd={(e) => {
+                    if (isActionTarget(e.target)) return;
                     if (!touchStartX || touchingMemberId !== member.id) return;
                     const endX = e.changedTouches[0]?.clientX ?? touchStartX;
                     const deltaX = endX - touchStartX;
-                    if (deltaX < -40) setRevealedWithdrawMemberId(member.id);
-                    if (deltaX > 40) setRevealedWithdrawMemberId(null);
+                    applySwipeState(member.id, deltaX);
                     setTouchStartX(null);
                     setTouchingMemberId(null);
                   }}
+                  onMouseDown={(e) => {
+                    if (isActionTarget(e.target)) return;
+                    setMouseStartX(e.clientX);
+                    setMouseMemberId(member.id);
+                  }}
+                  onMouseUp={(e) => {
+                    if (isActionTarget(e.target)) return;
+                    if (mouseStartX === null || mouseMemberId !== member.id) return;
+                    const deltaX = e.clientX - mouseStartX;
+                    applySwipeState(member.id, deltaX);
+                    setMouseStartX(null);
+                    setMouseMemberId(null);
+                  }}
+                  onMouseLeave={() => {
+                    setMouseStartX(null);
+                    setMouseMemberId(null);
+                  }}
                 >
                   <button
+                    data-swipe-action="true"
                     type="button"
+                    onTouchStart={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onTouchEnd={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onClick={() => void handleResetPassword(member.id)}
+                    className={[
+                      "absolute left-0 top-0 z-20 h-full w-20 bg-yellow-400 text-xs font-bold text-black transition-opacity duration-150",
+                      revealedResetMemberId === member.id
+                        ? "opacity-100 pointer-events-auto"
+                        : "opacity-0 pointer-events-none",
+                    ].join(" ")}
+                  >
+                    {resettingPasswordMemberId === member.id ? "초기화..." : "초기화"}
+                  </button>
+                  <button
+                    data-swipe-action="true"
+                    type="button"
+                    onTouchStart={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onTouchEnd={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                    }}
                     onClick={() => void handleWithdrawMember(member.id)}
                     className={[
-                      "absolute right-0 top-0 h-full w-20 bg-red-500 text-xs font-bold text-white transition-opacity duration-150",
+                      "absolute right-0 top-0 z-20 h-full w-20 bg-red-500 text-xs font-bold text-white transition-opacity duration-150",
                       revealedWithdrawMemberId === member.id
                         ? "opacity-100 pointer-events-auto"
                         : "opacity-0 pointer-events-none",
@@ -304,7 +401,11 @@ export default function AddMemberPage() {
                   <div
                     className={[
                       "relative z-10 flex items-center justify-between gap-3 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 transition-transform duration-200",
-                      revealedWithdrawMemberId === member.id ? "-translate-x-20" : "translate-x-0",
+                      revealedWithdrawMemberId === member.id
+                        ? "-translate-x-20"
+                        : revealedResetMemberId === member.id
+                          ? "translate-x-20"
+                          : "translate-x-0",
                     ].join(" ")}
                   >
                     <span className="min-w-0 truncate text-left">

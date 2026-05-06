@@ -6,7 +6,7 @@ import { supabase } from "@/src/lib/supabase";
 import { useSessionGuard } from "@/src/hooks/useSessionGuard";
 
 /** 로그인 화면 mock 초기 패스워드와 동일해야 함 */
-const INITIAL_PASSWORD = "0000";
+const INITIAL_PASSWORD = "000000";
 
 export default function ChangePasswordPage() {
   const router = useRouter();
