@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useSessionGuard } from "@/src/hooks/useSessionGuard";
 
@@ -29,12 +29,10 @@ export default function AddMemberPage() {
   const [openedRoleMenuMemberId, setOpenedRoleMenuMemberId] = useState<string | null>(null);
   const [updatingRoleMemberId, setUpdatingRoleMemberId] = useState<string | null>(null);
   const [resettingPasswordMemberId, setResettingPasswordMemberId] = useState<string | null>(null);
-  const [touchStartX, setTouchStartX] = useState<number | null>(null);
-  const [touchingMemberId, setTouchingMemberId] = useState<string | null>(null);
-  const [mouseStartX, setMouseStartX] = useState<number | null>(null);
-  const [mouseMemberId, setMouseMemberId] = useState<string | null>(null);
   const [revealedWithdrawMemberId, setRevealedWithdrawMemberId] = useState<string | null>(null);
-  const [revealedResetMemberId, setRevealedResetMemberId] = useState<string | null>(null);
+  const pointerStartXRef = useRef<number | null>(null);
+  const pointerMemberIdRef = useRef<string | null>(null);
+  const pointerIdRef = useRef<number | null>(null);
 
   useSessionGuard({
     onAuthorized: (member) => {
@@ -175,7 +173,6 @@ export default function AddMemberPage() {
 
     setMembers((prev) => prev.filter((member) => member.id !== memberId));
     setRevealedWithdrawMemberId(null);
-    setRevealedResetMemberId(null);
   };
 
   const handleResetPassword = async (memberId: string) => {
@@ -197,7 +194,6 @@ export default function AddMemberPage() {
     }
 
     alert("비밀번호가 초기화 되었습니다.");
-    setRevealedResetMemberId(null);
     setRevealedWithdrawMemberId(null);
     setResettingPasswordMemberId(null);
   };
@@ -205,13 +201,8 @@ export default function AddMemberPage() {
   const applySwipeState = (memberId: string, deltaX: number) => {
     if (deltaX < -40) {
       setRevealedWithdrawMemberId(memberId);
-      setRevealedResetMemberId(null);
-    } else if (deltaX > 40) {
-      setRevealedResetMemberId(memberId);
-      setRevealedWithdrawMemberId(null);
     } else {
       setRevealedWithdrawMemberId(null);
-      setRevealedResetMemberId(null);
     }
   };
 
@@ -318,39 +309,33 @@ export default function AddMemberPage() {
                 <div
                   key={member.id}
                   className={[
-                    "relative rounded-xl border border-white/10 bg-zinc-900",
+                    "relative rounded-xl border border-white/10 bg-zinc-900 touch-pan-y select-none",
                     openedRoleMenuMemberId === member.id ? "overflow-visible z-30" : "overflow-hidden",
                   ].join(" ")}
-                  onTouchStart={(e) => {
+                  onPointerDown={(e) => {
                     if (isActionTarget(e.target)) return;
-                    setTouchStartX(e.touches[0]?.clientX ?? null);
-                    setTouchingMemberId(member.id);
+                    if (e.button !== undefined && e.button !== 0) return;
+                    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+                    pointerIdRef.current = e.pointerId;
+                    pointerStartXRef.current = e.clientX;
+                    pointerMemberIdRef.current = member.id;
                   }}
-                  onTouchEnd={(e) => {
+                  onPointerUp={(e) => {
                     if (isActionTarget(e.target)) return;
-                    if (!touchStartX || touchingMemberId !== member.id) return;
-                    const endX = e.changedTouches[0]?.clientX ?? touchStartX;
-                    const deltaX = endX - touchStartX;
-                    applySwipeState(member.id, deltaX);
-                    setTouchStartX(null);
-                    setTouchingMemberId(null);
+                    if (pointerIdRef.current !== e.pointerId) return;
+                    const startX = pointerStartXRef.current;
+                    const memberId = pointerMemberIdRef.current;
+                    if (startX === null || !memberId) return;
+                    const deltaX = e.clientX - startX;
+                    applySwipeState(memberId, deltaX);
+                    pointerIdRef.current = null;
+                    pointerStartXRef.current = null;
+                    pointerMemberIdRef.current = null;
                   }}
-                  onMouseDown={(e) => {
-                    if (isActionTarget(e.target)) return;
-                    setMouseStartX(e.clientX);
-                    setMouseMemberId(member.id);
-                  }}
-                  onMouseUp={(e) => {
-                    if (isActionTarget(e.target)) return;
-                    if (mouseStartX === null || mouseMemberId !== member.id) return;
-                    const deltaX = e.clientX - mouseStartX;
-                    applySwipeState(member.id, deltaX);
-                    setMouseStartX(null);
-                    setMouseMemberId(null);
-                  }}
-                  onMouseLeave={() => {
-                    setMouseStartX(null);
-                    setMouseMemberId(null);
+                  onPointerCancel={() => {
+                    pointerIdRef.current = null;
+                    pointerStartXRef.current = null;
+                    pointerMemberIdRef.current = null;
                   }}
                 >
                   <button
@@ -365,15 +350,15 @@ export default function AddMemberPage() {
                     onMouseDown={(e) => {
                       e.stopPropagation();
                     }}
-                    onClick={() => void handleResetPassword(member.id)}
+                    onClick={() => void handleWithdrawMember(member.id)}
                     className={[
-                      "absolute left-0 top-0 z-20 h-full w-20 bg-yellow-400 text-xs font-bold text-black transition-opacity duration-150",
-                      revealedResetMemberId === member.id
+                      "absolute right-0 top-0 z-20 h-full w-20 bg-zinc-600 text-xs font-bold text-white transition-opacity duration-150",
+                      revealedWithdrawMemberId === member.id
                         ? "opacity-100 pointer-events-auto"
                         : "opacity-0 pointer-events-none",
                     ].join(" ")}
                   >
-                    {resettingPasswordMemberId === member.id ? "초기화..." : "초기화"}
+                    탈퇴
                   </button>
                   <button
                     data-swipe-action="true"
@@ -387,25 +372,23 @@ export default function AddMemberPage() {
                     onMouseDown={(e) => {
                       e.stopPropagation();
                     }}
-                    onClick={() => void handleWithdrawMember(member.id)}
+                    onClick={() => void handleResetPassword(member.id)}
                     className={[
-                      "absolute right-0 top-0 z-20 h-full w-20 bg-red-500 text-xs font-bold text-white transition-opacity duration-150",
+                      "absolute right-20 top-0 z-20 h-full w-20 bg-sky-500 text-xs font-bold text-white transition-opacity duration-150",
                       revealedWithdrawMemberId === member.id
                         ? "opacity-100 pointer-events-auto"
                         : "opacity-0 pointer-events-none",
                     ].join(" ")}
                   >
-                    탈퇴
+                    {resettingPasswordMemberId === member.id ? "초기화..." : "초기화"}
                   </button>
 
                   <div
                     className={[
                       "relative z-10 flex items-center justify-between gap-3 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 transition-transform duration-200",
                       revealedWithdrawMemberId === member.id
-                        ? "-translate-x-20"
-                        : revealedResetMemberId === member.id
-                          ? "translate-x-20"
-                          : "translate-x-0",
+                        ? "-translate-x-40"
+                        : "translate-x-0",
                     ].join(" ")}
                   >
                     <span className="min-w-0 truncate text-left">
