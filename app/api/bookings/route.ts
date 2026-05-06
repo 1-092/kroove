@@ -28,7 +28,7 @@ type ClassWithBookingsRow = {
 };
 
 function nowMs() {
-  return Number(process.hrtime.bigint() / 1000000n);
+  return Number(process.hrtime.bigint()) / 1_000_000;
 }
 
 async function sendKakaoworkBookingCompletedMessage(params: {
