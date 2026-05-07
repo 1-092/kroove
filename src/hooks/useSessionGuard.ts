@@ -1,16 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-
-export type SessionMember = {
-  ldap?: string | null;
-  role?: "member" | "manager" | "head" | null;
-};
-
-type AuthMeResponse = {
-  member?: SessionMember;
-};
+import { SessionGuardContext, type SessionMember } from "@/src/contexts/session-guard-context";
 
 type UseSessionGuardOptions = {
   redirectTo?: string;
@@ -20,59 +12,37 @@ type UseSessionGuardOptions = {
 
 export function useSessionGuard(options?: UseSessionGuardOptions) {
   const router = useRouter();
+  const context = useContext(SessionGuardContext);
   const redirectTo = options?.redirectTo ?? "/";
-  const [isSessionChecking, setIsSessionChecking] = useState(true);
-  const redirectNow = useCallback(() => {
+  const onAuthorizedRef = useRef(options?.onAuthorized);
+  const onUnauthorizedRef = useRef(options?.onUnauthorized);
+  onAuthorizedRef.current = options?.onAuthorized;
+  onUnauthorizedRef.current = options?.onUnauthorized;
+
+  if (!context) {
+    throw new Error("useSessionGuard must be used inside SessionGuardProvider");
+  }
+
+  const { status, member, validateSession } = context;
+
+  const redirectNow = () => {
     if (window.location.pathname !== redirectTo) {
       window.location.replace(redirectTo);
     } else {
       router.replace(redirectTo);
     }
-  }, [redirectTo, router]);
-
-  const validateSession = useCallback(async () => {
-    const response = await fetch("/api/auth/me", {
-      method: "GET",
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      options?.onUnauthorized?.();
-      setIsSessionChecking(false);
-      redirectNow();
-      return;
-    }
-
-    const json = (await response.json()) as AuthMeResponse;
-    const member = json.member ?? {};
-
-    if (!member.ldap) {
-      options?.onUnauthorized?.();
-      setIsSessionChecking(false);
-      redirectNow();
-      return;
-    }
-
-    options?.onAuthorized?.(member);
-    setIsSessionChecking(false);
-  }, [options, redirectNow]);
+  };
 
   useEffect(() => {
-    const onFocus = () => {
-      void validateSession();
-    };
-    const onPageShow = () => {
-      void validateSession();
-    };
+    if (status === "authenticated" && member?.ldap) {
+      onAuthorizedRef.current?.(member);
+      return;
+    }
+    if (status === "unauthorized") {
+      onUnauthorizedRef.current?.();
+      redirectNow();
+    }
+  }, [member, status, redirectTo, router]);
 
-    void validateSession();
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("pageshow", onPageShow);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("pageshow", onPageShow);
-    };
-  }, [validateSession]);
-
-  return { isSessionChecking, validateSession };
+  return { isSessionChecking: status === "checking", validateSession };
 }
